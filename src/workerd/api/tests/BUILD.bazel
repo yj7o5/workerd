@@ -85,6 +85,12 @@ wd_test(
 )
 
 wd_test(
+    src = "cf-cache-control-test.wd-test",
+    args = ["--experimental"],
+    data = ["cf-cache-control-test.js"],
+)
+
+wd_test(
     src = "ctx-props-test.wd-test",
     args = ["--experimental"],
 )
