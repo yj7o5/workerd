@@ -3,9 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 #pragma once
-// APIs that an Actor (Durable Object) uses to access its own state.
-//
-// See actor.h for APIs used by other Workers to talk to Actors.
+// Container management API for Durable Object-attached containers.
 //
 #include <workerd/io/compatibility-date.h>
 #include <workerd/io/container.capnp.h>
@@ -24,15 +22,50 @@ class Container: public jsg::Object {
  public:
   Container(rpc::Container::Client rpcClient, bool running);
 
+  struct DirectorySnapshot {
+    kj::String id;
+    double size;
+    kj::String dir;
+    jsg::Optional<kj::String> name;
+
+    JSG_STRUCT(id, size, dir, name);
+    JSG_STRUCT_TS_OVERRIDE_DYNAMIC(CompatibilityFlags::Reader flags) {
+      if (!flags.getWorkerdExperimental()) {
+        JSG_TS_OVERRIDE(type DirectorySnapshot = never);
+      }
+    }
+  };
+
+  struct DirectorySnapshotOptions {
+    kj::String dir;
+    jsg::Optional<kj::String> name;
+
+    JSG_STRUCT(dir, name);
+  };
+
+  struct SnapshotRestoreParams {
+    DirectorySnapshot snapshot;
+    jsg::Optional<kj::String> mountPoint;
+
+    JSG_STRUCT(snapshot, mountPoint);
+    JSG_STRUCT_TS_OVERRIDE_DYNAMIC(CompatibilityFlags::Reader flags) {
+      if (!flags.getWorkerdExperimental()) {
+        JSG_TS_OVERRIDE(type SnapshotRestoreParams = never);
+      }
+    }
+  };
+
   struct StartupOptions {
     jsg::Optional<kj::Array<kj::String>> entrypoint;
     bool enableInternet = false;
     jsg::Optional<jsg::Dict<kj::String>> env;
     jsg::Optional<int64_t> hardTimeout;
+    jsg::Optional<jsg::Dict<kj::String>> labels;
+    jsg::Optional<kj::Array<SnapshotRestoreParams>> snapshots;
 
     // TODO(containers): Allow intercepting stdin/stdout/stderr by specifying streams here.
 
-    JSG_STRUCT(entrypoint, enableInternet, env, hardTimeout);
+    JSG_STRUCT(entrypoint, enableInternet, env, hardTimeout, labels, snapshots);
     JSG_STRUCT_TS_OVERRIDE_DYNAMIC(CompatibilityFlags::Reader flags) {
       if (flags.getWorkerdExperimental()) {
         JSG_TS_OVERRIDE(ContainerStartupOptions {
@@ -40,18 +73,23 @@ class Container: public jsg::Object {
           enableInternet: boolean;
           env?: Record<string, string>;
           hardTimeout?: number | bigint;
+          labels?: Record<string, string>;
+          snapshots?: ContainerSnapshotRestoreParams[];
         });
       } else {
         JSG_TS_OVERRIDE(ContainerStartupOptions {
           entrypoint?: string[];
           enableInternet: boolean;
           env?: Record<string, string>;
+          hardTimeout?: never;
+          labels?: Record<string, string>;
+          snapshots?: never;
         });
       }
     }
   };
 
-  bool getRunning() {
+  bool getRunning() const {
     return running;
   }
 
@@ -65,6 +103,10 @@ class Container: public jsg::Object {
   jsg::Promise<void> interceptOutboundHttp(
       jsg::Lock& js, kj::String addr, jsg::Ref<Fetcher> binding);
   jsg::Promise<void> interceptAllOutboundHttp(jsg::Lock& js, jsg::Ref<Fetcher> binding);
+  jsg::Promise<void> interceptOutboundHttps(
+      jsg::Lock& js, kj::String addr, jsg::Ref<Fetcher> binding);
+  jsg::Promise<DirectorySnapshot> snapshotDirectory(
+      jsg::Lock& js, DirectorySnapshotOptions options);
 
   // TODO(containers): listenTcp()
 
@@ -79,6 +121,10 @@ class Container: public jsg::Object {
 
     JSG_METHOD(interceptOutboundHttp);
     JSG_METHOD(interceptAllOutboundHttp);
+    if (flags.getWorkerdExperimental()) {
+      JSG_METHOD(interceptOutboundHttps);
+      JSG_METHOD(snapshotDirectory);
+    }
   }
 
   void visitForMemoryInfo(jsg::MemoryTracker& tracker) const {
@@ -99,6 +145,8 @@ class Container: public jsg::Object {
   class TcpPortOutgoingFactory;
 };
 
-#define EW_CONTAINER_ISOLATE_TYPES api::Container, api::Container::StartupOptions
+#define EW_CONTAINER_ISOLATE_TYPES                                                                 \
+  api::Container, api::Container::DirectorySnapshot, api::Container::DirectorySnapshotOptions,     \
+      api::Container::SnapshotRestoreParams, api::Container::StartupOptions
 
 }  // namespace workerd::api

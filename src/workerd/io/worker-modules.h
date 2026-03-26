@@ -138,11 +138,16 @@ static kj::Arc<jsg::modules::ModuleRegistry> newWorkerModuleRegistry(
             flags = flags | jsg::modules::Module::Flags::MAIN;
             firstEsm = false;
           }
-          // The content.body is memory-resident and is expected to outlive the
-          // module registry. We can safely pass a reference to the module handler.
-          // It will not be copied into a JS string until the module is actually
-          // evaluated.
-          bundleBuilder.addEsmModule(def.name, content.body, flags);
+          if (content.ownBody != kj::none) {
+            // When the source is owned (e.g. transpiled TypeScript), we must
+            // copy it into the module registry since the owning rust::String
+            // may not outlive the registry.
+            bundleBuilder.addEsmModule(def.name, kj::heapArray<const char>(content.body), flags);
+          } else {
+            // The content.body points into process-lifetime capnp message
+            // buffers. We can safely pass a non-owning reference.
+            bundleBuilder.addEsmModule(def.name, content.body, flags);
+          }
           break;
         }
         KJ_CASE_ONEOF(content, Worker::Script::TextModule) {

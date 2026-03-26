@@ -97,6 +97,7 @@ struct Trace @0x8e8d911203762d34 {
     email @16 :EmailEventInfo;
     trace @18 :TraceEventInfo;
     hibernatableWebSocket @20 :HibernatableWebSocketEventInfo;
+    connect @29 :ConnectEventInfo;
   }
   struct FetchEventInfo {
     method @0 :HttpMethod;
@@ -112,6 +113,9 @@ struct Trace @0x8e8d911203762d34 {
 
   struct JsRpcEventInfo {
     methodName @0 :Text;
+  }
+
+  struct ConnectEventInfo {
   }
 
   struct ScheduledEventInfo {
@@ -270,6 +274,7 @@ struct Trace @0x8e8d911203762d34 {
       email @5 :EmailEventInfo;
       trace @6 :TraceEventInfo;
       hibernatableWebSocket @7 :HibernatableWebSocketEventInfo;
+      connect @9 :ConnectEventInfo;
       custom @8 :CustomEventInfo;
     }
     }
@@ -330,6 +335,7 @@ struct AlarmRun @0xfa8ea4e97e23b03d {
 
   retry @1 :Bool;
   retryCountsAgainstLimit @2 :Bool = true;
+  errorDescription @3 :Text;
 }
 
 struct QueueMessage @0x944adb18c0352295 {

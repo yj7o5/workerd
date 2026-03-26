@@ -1,12 +1,23 @@
+// Copyright (c) 2026 Cloudflare, Inc.
+// Licensed under the Apache 2.0 license found in the LICENSE file or at:
+//     https://opensource.org/licenses/Apache-2.0
+
 #include "ffi.h"
 
 #include <workerd/jsg/jsg.h>
+#include <workerd/jsg/setup.h>
 #include <workerd/jsg/util.h>
 #include <workerd/jsg/wrappable.h>
 #include <workerd/rust/jsg/ffi-inl.h>
+#include <workerd/rust/jsg/lib.rs.h>
 #include <workerd/rust/jsg/v8.rs.h>
 
+#include <kj-rs/convert.h>
+
 #include <kj/common.h>
+#include <kj/string.h>
+
+#include <memory>
 
 using namespace kj_rs;
 
@@ -45,6 +56,29 @@ namespace workerd::rust::jsg {
   }
 
 // =============================================================================
+
+// Wrappable implementation - calls into Rust via CXX bridge
+Wrappable::~Wrappable() {
+  wrappable_invoke_drop(*this);
+}
+
+void Wrappable::jsgVisitForGc(::workerd::jsg::GcVisitor& visitor) {
+  auto ffi_visitor = to_ffi(&visitor);
+  wrappable_invoke_trace(*this, &ffi_visitor);
+}
+
+kj::StringPtr Wrappable::jsgGetMemoryName() const {
+  // memory_name() on the Rust side returns a &'static str backed by a
+  // compile-time c"..." literal, so the pointer is valid for the process
+  // lifetime. Construct kj::StringPtr directly from data+size — no copy,
+  // no allocation, no caching needed.
+  auto name = wrappable_invoke_get_name(*this);
+  return kj::StringPtr(name.data(), name.size());
+}
+
+size_t Wrappable::jsgGetMemorySelfSize() const {
+  return sizeof(Wrappable);
+}
 
 // Local<T>
 void local_drop(Local value) {
@@ -188,11 +222,154 @@ bool local_is_function(const Local& val) {
   return local_as_ref_from_ffi<v8::Value>(val)->IsFunction();
 }
 
+bool local_is_symbol(const Local& val) {
+  return local_as_ref_from_ffi<v8::Value>(val)->IsSymbol();
+}
+
+bool local_is_name(const Local& val) {
+  return local_as_ref_from_ffi<v8::Value>(val)->IsName();
+}
+
 ::rust::String local_type_of(Isolate* isolate, const Local& val) {
   auto v8Val = local_as_ref_from_ffi<v8::Value>(val);
   v8::Local<v8::String> typeStr = v8Val->TypeOf(isolate);
   v8::String::Utf8Value utf8(isolate, typeStr);
   return ::rust::String(*utf8, utf8.length());
+}
+
+// Utf8Value
+Utf8Value utf8_value_new(Isolate* isolate, Local value) {
+  auto* v = new v8::String::Utf8Value(isolate, local_from_ffi<v8::Value>(kj::mv(value)));
+  return Utf8Value{reinterpret_cast<size_t>(v)};
+}
+
+void utf8_value_drop(Utf8Value value) {
+  delete reinterpret_cast<v8::String::Utf8Value*>(value.ptr);
+}
+
+size_t utf8_value_length(const Utf8Value& value) {
+  return reinterpret_cast<const v8::String::Utf8Value*>(value.ptr)->length();
+}
+
+const uint8_t* utf8_value_data(const Utf8Value& value) {
+  return reinterpret_cast<const uint8_t*>(
+      **reinterpret_cast<const v8::String::Utf8Value*>(value.ptr));
+}
+
+// Local<String>
+Local local_string_empty(Isolate* isolate) {
+  return to_ffi(v8::String::Empty(isolate));
+}
+
+int32_t local_string_length(const Local& value) {
+  return local_as_ref_from_ffi<v8::String>(value)->Length();
+}
+
+bool local_string_is_one_byte(const Local& value) {
+  // Note: IsOneByte() reflects V8's internal string representation, not the logical
+  // content. A string containing only Latin-1 characters may still return false if V8
+  // stores it as two-byte (e.g. after concatenation), i.e. false negatives are possible.
+  // Use ContainsOnlyOneByte() for a content-based check, keeping in mind that it scans
+  // the entire string.
+  return local_as_ref_from_ffi<v8::String>(value)->IsOneByte();
+}
+
+bool local_string_contains_only_one_byte(const Local& value) {
+  return local_as_ref_from_ffi<v8::String>(value)->ContainsOnlyOneByte();
+}
+
+size_t local_string_utf8_length(Isolate* isolate, const Local& value) {
+  return local_as_ref_from_ffi<v8::String>(value)->Utf8LengthV2(isolate);
+}
+
+void local_string_write_v2(Isolate* isolate,
+    const Local& value,
+    uint32_t offset,
+    uint32_t length,
+    uint16_t* buffer,
+    int32_t flags) {
+  local_as_ref_from_ffi<v8::String>(value)->WriteV2(isolate, offset, length, buffer, flags);
+}
+
+void local_string_write_one_byte_v2(Isolate* isolate,
+    const Local& value,
+    uint32_t offset,
+    uint32_t length,
+    uint8_t* buffer,
+    int32_t flags) {
+  local_as_ref_from_ffi<v8::String>(value)->WriteOneByteV2(isolate, offset, length, buffer, flags);
+}
+
+size_t local_string_write_utf8_v2(
+    Isolate* isolate, const Local& value, uint8_t* buffer, size_t capacity, int32_t flags) {
+  return local_as_ref_from_ffi<v8::String>(value)->WriteUtf8V2(
+      isolate, reinterpret_cast<char*>(buffer), capacity, flags);
+}
+
+bool local_string_equals(const Local& value, const Local& other) {
+  return local_as_ref_from_ffi<v8::String>(value)->StringEquals(
+      local_as_ref_from_ffi<v8::String>(other));
+}
+
+bool local_string_is_flat(const Local& value) {
+  return local_as_ref_from_ffi<v8::String>(value)->IsFlat();
+}
+
+Local local_string_concat(Isolate* isolate, Local left, Local right) {
+  return to_ffi(v8::String::Concat(isolate, local_from_ffi<v8::String>(kj::mv(left)),
+      local_from_ffi<v8::String>(kj::mv(right))));
+}
+
+Local local_string_internalize(Isolate* isolate, const Local& value) {
+  return to_ffi(local_as_ref_from_ffi<v8::String>(value)->InternalizeString(isolate));
+}
+
+MaybeLocal local_string_new_from_utf8(
+    Isolate* isolate, const uint8_t* data, int32_t length, bool internalized) {
+  auto type = internalized ? v8::NewStringType::kInternalized : v8::NewStringType::kNormal;
+  return maybe_local_to_ffi(
+      v8::String::NewFromUtf8(isolate, reinterpret_cast<const char*>(data), type, length));
+}
+
+MaybeLocal local_string_new_from_one_byte(
+    Isolate* isolate, const uint8_t* data, int32_t length, bool internalized) {
+  auto type = internalized ? v8::NewStringType::kInternalized : v8::NewStringType::kNormal;
+  return maybe_local_to_ffi(v8::String::NewFromOneByte(isolate, data, type, length));
+}
+
+MaybeLocal local_string_new_from_two_byte(
+    Isolate* isolate, const uint16_t* data, int32_t length, bool internalized) {
+  auto type = internalized ? v8::NewStringType::kInternalized : v8::NewStringType::kNormal;
+  return maybe_local_to_ffi(v8::String::NewFromTwoByte(isolate, data, type, length));
+}
+
+bool maybe_local_is_empty(const MaybeLocal& value) {
+  auto ptr_void = reinterpret_cast<const void*>(&value.ptr);
+  return reinterpret_cast<const v8::MaybeLocal<v8::Value>*>(ptr_void)->IsEmpty();
+}
+
+// Local<Name>
+int32_t local_name_get_identity_hash(const Local& value) {
+  return local_as_ref_from_ffi<v8::Name>(value)->GetIdentityHash();
+}
+
+// Local<Symbol>
+Local local_symbol_new(Isolate* isolate) {
+  return to_ffi(v8::Symbol::New(isolate));
+}
+
+Local local_symbol_new_with_description(Isolate* isolate, Local description) {
+  return to_ffi(v8::Symbol::New(isolate, local_from_ffi<v8::String>(kj::mv(description))));
+}
+
+MaybeLocal local_symbol_description(Isolate* isolate, const Local& value) {
+  auto sym = local_as_ref_from_ffi<v8::Symbol>(value);
+  v8::Local<v8::Value> desc = sym->Description(isolate);
+  if (desc->IsUndefined()) {
+    return maybe_local_to_ffi(v8::MaybeLocal<v8::String>());
+  }
+  // Description is always a String when present.
+  return maybe_local_to_ffi(v8::MaybeLocal<v8::String>(desc.As<v8::String>()));
 }
 
 // Local<Function>
@@ -273,20 +450,41 @@ DEFINE_TYPED_ARRAY_NEW(bigint64_array, BigInt64Array, int64_t)
 DEFINE_TYPED_ARRAY_NEW(biguint64_array, BigUint64Array, uint64_t)
 
 // Wrappers
-Local wrap_resource(Isolate* isolate, size_t resource, const Global& tmpl, size_t drop_callback) {
-  auto self = reinterpret_cast<void*>(resource);
+Local wrap_resource(Isolate* isolate, kj::Rc<Wrappable> wrappable, const Global& tmpl) {
+  // Check if already wrapped
+  KJ_IF_SOME(handle, wrappable->tryGetHandle(isolate)) {
+    return to_ffi(v8::Local<v8::Value>::Cast(handle));
+  }
+
   auto& global_tmpl = global_as_ref_from_ffi<v8::FunctionTemplate>(tmpl);
   auto local_tmpl = v8::Local<v8::FunctionTemplate>::New(isolate, global_tmpl);
   v8::Local<v8::Object> object = ::workerd::jsg::check(
       local_tmpl->InstanceTemplate()->NewInstance(isolate->GetCurrentContext()));
+
+  // attachWrapper sets up CppgcShim, TracedReference, internal fields, etc.
+  wrappable->attachWrapper(isolate, object, true);
+
+  // Override tag to identify as Rust object for unwrapping
   auto tagAddress = const_cast<uint16_t*>(&::workerd::jsg::Wrappable::WORKERD_RUST_WRAPPABLE_TAG);
   object->SetAlignedPointerInInternalField(::workerd::jsg::Wrappable::WRAPPABLE_TAG_FIELD_INDEX,
       tagAddress,
       static_cast<v8::EmbedderDataTypeTag>(::workerd::jsg::Wrappable::WRAPPABLE_TAG_FIELD_INDEX));
-  object->SetAlignedPointerInInternalField(::workerd::jsg::Wrappable::WRAPPED_OBJECT_FIELD_INDEX,
-      self,
-      static_cast<v8::EmbedderDataTypeTag>(::workerd::jsg::Wrappable::WRAPPED_OBJECT_FIELD_INDEX));
-  return to_ffi(kj::mv(object));
+
+  return to_ffi(v8::Local<v8::Value>::Cast(object));
+}
+
+void wrappable_attach_wrapper(kj::Rc<Wrappable> wrappable, FunctionCallbackInfo& args) {
+  auto* isolate = args.GetIsolate();
+  auto object = args.This();
+
+  // attachWrapper sets up CppgcShim, TracedReference, internal fields, etc.
+  wrappable->attachWrapper(isolate, object, true);
+
+  // Override tag to identify as Rust object for unwrapping
+  auto tagAddress = const_cast<uint16_t*>(&::workerd::jsg::Wrappable::WORKERD_RUST_WRAPPABLE_TAG);
+  object->SetAlignedPointerInInternalField(::workerd::jsg::Wrappable::WRAPPABLE_TAG_FIELD_INDEX,
+      tagAddress,
+      static_cast<v8::EmbedderDataTypeTag>(::workerd::jsg::Wrappable::WRAPPABLE_TAG_FIELD_INDEX));
 }
 
 // Unwrappers
@@ -310,16 +508,26 @@ double unwrap_number(Isolate* isolate, Local value) {
       ->Value();
 }
 
-size_t unwrap_resource(Isolate* isolate, Local value) {
-  auto v8_obj = local_from_ffi<v8::Object>(kj::mv(value));
-  KJ_ASSERT(v8_obj->GetAlignedPointerFromInternalField(
-                ::workerd::jsg::Wrappable::WRAPPABLE_TAG_FIELD_INDEX,
-                static_cast<v8::EmbedderDataTypeTag>(
-                    ::workerd::jsg::Wrappable::WRAPPABLE_TAG_FIELD_INDEX)) ==
-      const_cast<uint16_t*>(&::workerd::jsg::Wrappable::WORKERD_RUST_WRAPPABLE_TAG));
-  return reinterpret_cast<size_t>(v8_obj->GetAlignedPointerFromInternalField(
-      ::workerd::jsg::Wrappable::WRAPPED_OBJECT_FIELD_INDEX,
-      static_cast<v8::EmbedderDataTypeTag>(::workerd::jsg::Wrappable::WRAPPED_OBJECT_FIELD_INDEX)));
+kj::Rc<Wrappable> unwrap_resource(Isolate* isolate, Local value) {
+  auto v8_val = local_from_ffi<v8::Value>(kj::mv(value));
+  // Non-object values (numbers, strings, booleans, etc.) are never wrapped resources.
+  if (!v8_val->IsObject()) return nullptr;
+  auto v8_obj = v8_val.As<v8::Object>();
+  // Plain JS objects have no internal fields; check before reading to avoid V8 fatal error.
+  if (v8_obj->InternalFieldCount() < ::workerd::jsg::Wrappable::INTERNAL_FIELD_COUNT ||
+      v8_obj->GetAlignedPointerFromInternalField(
+          ::workerd::jsg::Wrappable::WRAPPABLE_TAG_FIELD_INDEX,
+          static_cast<v8::EmbedderDataTypeTag>(
+              ::workerd::jsg::Wrappable::WRAPPABLE_TAG_FIELD_INDEX)) !=
+          const_cast<uint16_t*>(&::workerd::jsg::Wrappable::WORKERD_RUST_WRAPPABLE_TAG)) {
+    return nullptr;
+  }
+  auto* ptr = static_cast<Wrappable*>(
+      reinterpret_cast<::workerd::jsg::Wrappable*>(v8_obj->GetAlignedPointerFromInternalField(
+          ::workerd::jsg::Wrappable::WRAPPED_OBJECT_FIELD_INDEX,
+          static_cast<v8::EmbedderDataTypeTag>(
+              ::workerd::jsg::Wrappable::WRAPPED_OBJECT_FIELD_INDEX))));
+  return ptr->toRc();
 }
 
 // TypedArray unwrap functions
@@ -382,8 +590,8 @@ DEFINE_TYPED_ARRAY_GET(bigint64_array, BigInt64Array, int64_t)
 DEFINE_TYPED_ARRAY_GET(biguint64_array, BigUint64Array, uint64_t)
 
 // Global<T>
-void global_drop(Global value) {
-  global_from_ffi<v8::Value>(kj::mv(value));
+void global_reset(Global& value) {
+  global_as_ref_from_ffi<v8::Value>(value)->Reset();
 }
 
 Global global_clone(Isolate* isolate, const Global& value) {
@@ -397,13 +605,80 @@ Local global_to_local(Isolate* isolate, const Global& value) {
   return to_ffi(kj::mv(local));
 }
 
-void global_make_weak(Isolate* isolate, Global* value, size_t data, WeakCallback callback) {
-  // callback is unused; GC-based cleanup not yet implemented.
-  // Cleanup happens in Realm::drop() during context disposal.
-  auto glbl = global_as_ref_from_ffi<v8::Object>(*value);
-  glbl->SetWeak(reinterpret_cast<void*>(data), [](const v8::WeakCallbackInfo<void>& info) {
-    KJ_UNIMPLEMENTED("global_make_weak");
-  }, v8::WeakCallbackType::kParameter);
+// Wrappable - data access
+const TraitObjectPtr& wrappable_get_trait_object(const Wrappable& wrappable) {
+  return wrappable.trait_object;
+}
+
+void wrappable_clear_trait_object(Wrappable& wrappable) {
+  wrappable.trait_object = {0, 0, 0, 0};
+}
+
+kj::uint wrappable_strong_refcount(const Wrappable& wrappable) {
+  return wrappable.getStrongRefcount();
+}
+
+// Wrappable lifecycle
+kj::Rc<Wrappable> wrappable_new(TraitObjectPtr ptr) {
+  auto rc = kj::rc<Wrappable>();
+  rc->trait_object = kj::mv(ptr);
+  rc->addStrongRef();
+  return kj::mv(rc);
+}
+
+kj::Rc<Wrappable> wrappable_to_rc(Wrappable& wrappable) {
+  return wrappable.toRc();
+}
+
+void wrappable_add_strong_ref(Wrappable& wrappable) {
+  wrappable.addStrongRef();
+}
+
+void wrappable_remove_strong_ref(Wrappable& wrappable, bool is_strong) {
+  // maybeDeferDestruction() requires a kj::Own<Wrappable> to take ownership of.
+  // We must temporarily increment the refcount via addRef() to create that handle.
+  //
+  // Refcount accounting:
+  //   addRef(wrappable)      → +1 (creates `own`)
+  //   maybeDeferDestruction  → internally stores `own` in RefToDelete
+  //   ~RefToDelete           → if is_strong: calls removeStrongRef(), then drops `own` → -1
+  // Net effect: 0 (the actual kj::Rc decrement happens later when Rust drops the KjRc).
+  //
+  // is_strong must match the Ref's current strong flag. If GC tracing already transitioned
+  // the ref to weak (strong=false), passing true here would double-decrement strongRefcount.
+  auto own = kj::addRef(wrappable);
+  wrappable.maybeDeferDestruction(is_strong, kj::mv(own), &wrappable);
+}
+
+void wrappable_visit_global(GcVisitor* visitor, uintptr_t* global, TracedReference& traced) {
+  auto* gcVisitor = gc_visitor_from_ffi(visitor);
+  auto& strongHandle = *reinterpret_cast<v8::Global<v8::Value>*>(global);
+  auto& tracedHandle = traced_ref_from_ffi(traced);
+  gcVisitor->visit(strongHandle, tracedHandle);
+}
+
+void traced_reference_reset(TracedReference& traced) {
+  traced_ref_from_ffi(traced).Reset();
+}
+
+void wrappable_visit_ref(
+    Wrappable& wrappable, uintptr_t* ref_parent, bool* ref_strong, GcVisitor* visitor) {
+  auto* gcVisitor = gc_visitor_from_ffi(visitor);
+
+  // Convert opaque uintptr_t to kj::Maybe<Wrappable&>
+  kj::Maybe<::workerd::jsg::Wrappable&> parentMaybe;
+  if (*ref_parent != 0) {
+    parentMaybe = *reinterpret_cast<::workerd::jsg::Wrappable*>(*ref_parent);
+  }
+
+  wrappable.visitRef(*gcVisitor, parentMaybe, *ref_strong);
+
+  // Write back
+  KJ_IF_SOME(p, parentMaybe) {
+    *ref_parent = reinterpret_cast<uintptr_t>(&p);
+  } else {
+    *ref_parent = 0;
+  }
 }
 
 // FunctionCallbackInfo
@@ -455,13 +730,6 @@ Global create_resource_template(Isolate* isolate, const ResourceDescriptor& desc
     prototype->Set(v8::Symbol::GetToStringTag(isolate), classname, v8::PropertyAttribute::DontEnum);
   }
 
-  // Previously, miniflare would use the lack of a Symbol.toStringTag on a class to
-  // detect a type that came from the runtime. That's obviously a bit problematic because
-  // Symbol.toStringTag is required for full compliance on standard web platform APIs.
-  // To help use cases where it is necessary to detect if a class is a runtime class, we
-  // will add a special symbol to the prototype of the class to indicate. Note that
-  // because this uses the global symbol registry user code could still mark their own
-  // classes with this symbol but that's unlikely to be a problem in any practical case.
   auto internalMarker =
       v8::Symbol::For(isolate, ::workerd::jsg::v8StrIntern(isolate, "cloudflare:internal-class"));
   prototype->Set(internalMarker, internalMarker,
@@ -469,17 +737,6 @@ Global create_resource_template(Isolate* isolate, const ResourceDescriptor& desc
           v8::PropertyAttribute::DontDelete | v8::PropertyAttribute::ReadOnly));
 
   constructor->SetClassName(classname);
-
-  // auto& typeWrapper = static_cast<TypeWrapper&>(*this);
-
-  // ResourceTypeBuilder<TypeWrapper, T, isContext> builder(
-  //     typeWrapper, isolate, constructor, instance, prototype, signature);
-
-  // if constexpr (isDetected<GetConfiguration, T>()) {
-  //   T::template registerMembers<decltype(builder), T>(builder, configuration);
-  // } else {
-  //   T::template registerMembers<decltype(builder), T>(builder);
-  // }
 
   for (const auto& method: descriptor.static_methods) {
     auto functionTemplate = v8::FunctionTemplate::New(isolate,
@@ -563,6 +820,25 @@ void isolate_throw_error(Isolate* isolate, ::rust::Str description) {
   auto message = ::workerd::jsg::check(v8::String::NewFromUtf8(
       isolate, description.data(), v8::NewStringType::kInternalized, description.size()));
   isolate->ThrowError(message);
+}
+
+void isolate_throw_internal_error(Isolate* isolate, ::rust::Str internalMessage) {
+  // Mirrors makeInternalError() from util.c++: generates a unique error ID,
+  // logs the internal message (with ID) to KJ_LOG(ERROR) for Sentry, and
+  // throws a generic "internal error; reference = <id>" JS Error to the caller.
+  // kj::heapString(data, size) copies exactly `size` bytes and appends a NUL,
+  // avoiding the out-of-bounds read that kj::StringPtr(data, size) would cause
+  // on non-NUL-terminated Rust &str data.
+  auto message = kj::heapString(internalMessage.data(), internalMessage.size());
+  isolate->ThrowException(::workerd::jsg::makeInternalError(isolate, message));
+}
+
+void isolate_request_termination(Isolate* isolate) {
+  ::workerd::jsg::IsolateBase::from(isolate).requestTermination();
+}
+
+bool isolate_is_termination_requested(Isolate* isolate) {
+  return ::workerd::jsg::IsolateBase::from(isolate).isTerminationRequested();
 }
 
 bool isolate_is_locked(Isolate* isolate) {

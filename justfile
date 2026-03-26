@@ -84,7 +84,7 @@ new-wpt-test test_name:
 new-test test_name:
   ./tools/unix/new-test.sh {{test_name}}
 
-format: rustfmt
+format:
   python3 tools/cross/format.py
 
 internal-pr:
@@ -97,9 +97,6 @@ update-deps prefix="":
 # equivalent to `cargo update`; use `workspace` or <package> to limit update scope
 update-rust package="full":
   bazel run //deps/rust:crates_vendor -- --repin {{package}}
-
-rustfmt:
-  bazel run @rules_rust//:rustfmt
 
 # example: just bench mimetype
 bench path:

@@ -158,16 +158,12 @@ def buildifier(files: list[Path], check: bool = False) -> bool:
 
 
 def rustfmt(files: list[Path], check: bool = False) -> bool:
-    # Used by edgeworker (via format.json); uses a standalone rustfmt binary to
-    # avoid pulling in the V8 build cache through bazel toolchain resolution.
     if not files:
         return True
     cmd = ["--edition", "2024"]
     if check:
         cmd.append("--check")
-    result = run_bazel_tool(
-        "rustfmt", cmd + files, build_target="//build/deps/formatters:rustfmt@rule"
-    )
+    result = run_bazel_tool("rustfmt", cmd + files)
     return result.returncode == 0
 
 
@@ -271,6 +267,20 @@ def main() -> None:
 
     with (Path(__file__).parent / "format.json").open() as fp:
         configs = json.load(fp, object_hook=lambda o: FormatConfig(**o))
+
+    # Ensure all required tools are downloaded before running formatters in
+    # parallel.  Otherwise a slow `bazel build` for a missing tool races with
+    # the other formatters and its output gets interleaved.
+    needed_formatters = set()
+    for config in configs:
+        matched = filter_files_by_globs(
+            files, Path(config.directory), config.globs, config.excludes
+        )
+        if matched:
+            needed_formatters.add(config.formatter)
+    for name in needed_formatters:
+        if name in ("clang-format", "buildifier", "ruff", "rustfmt"):
+            _ensure_bazel_tool(name)
 
     all_ok = True
 

@@ -23,5 +23,10 @@
     "directory": ".",
     "globs": ["*.bzl", "BUILD", "BUILD.*", "*.bazel"],
     "formatter": "buildifier"
+  },
+  {
+    "directory": "src",
+    "globs": ["*.rs"],
+    "formatter": "rustfmt"
   }
 ]

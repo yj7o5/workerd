@@ -426,7 +426,7 @@ class ZlibUtil final: public jsg::Object {
       errorHandler = kj::mv(handler);
     }
 
-    void updateWriteResult();
+    void updateWriteResult(jsg::Lock& js);
 
     template <bool async>
     void write(jsg::Lock& js,
@@ -452,7 +452,8 @@ class ZlibUtil final: public jsg::Object {
       return &context_;
     }
 
-    void initializeStream(jsg::BufferSource _write_result, jsg::Function<void()> writeCallback);
+    void initializeStream(
+        jsg::Lock& js, jsg::JsArrayBufferView& _write_result, jsg::Function<void()> writeCallback);
 
     // Used to store allocations in Brotli* operations.
     // This declaration should be physically positioned before
@@ -468,7 +469,7 @@ class ZlibUtil final: public jsg::Object {
 
     // Equivalent to `write_js_callback` in Node.js
     jsg::Optional<jsg::Function<void()>> writeCallback;
-    jsg::Optional<jsg::BufferSource> writeResult;
+    jsg::Optional<jsg::JsRef<jsg::JsArrayBufferView>> writeResult;
     jsg::Optional<CompressionStreamErrorHandler> errorHandler;
   };
 
@@ -481,11 +482,12 @@ class ZlibUtil final: public jsg::Object {
     static jsg::Ref<ZlibStream> constructor(jsg::Lock& js, ZlibModeValue mode);
 
     // Instance methods
-    void initialize(int windowBits,
+    void initialize(jsg::Lock& js,
+        int windowBits,
         int level,
         int memLevel,
         int strategy,
-        jsg::BufferSource writeState,
+        jsg::JsArrayBufferView writeState,
         jsg::Function<void()> writeCallback,
         jsg::Optional<kj::Array<kj::byte>> dictionary);
     void params(jsg::Lock& js, int level, int strategy);
@@ -508,8 +510,8 @@ class ZlibUtil final: public jsg::Object {
     static jsg::Ref<BrotliCompressionStream> constructor(jsg::Lock& js, ZlibModeValue mode);
 
     bool initialize(jsg::Lock& js,
-        jsg::BufferSource params,
-        jsg::BufferSource writeResult,
+        jsg::JsArrayBufferView params,
+        jsg::JsArrayBufferView writeResult,
         jsg::Function<void()> writeCallback);
 
     void params() {
@@ -541,8 +543,8 @@ class ZlibUtil final: public jsg::Object {
     static jsg::Ref<ZstdCompressionStream> constructor(jsg::Lock& js, ZlibModeValue mode);
 
     bool initialize(jsg::Lock& js,
-        jsg::BufferSource params,
-        jsg::BufferSource writeResult,
+        jsg::JsArrayBufferView params,
+        jsg::JsArrayBufferView writeResult,
         jsg::Function<void()> writeCallback,
         jsg::Optional<uint64_t> pledgedSrcSize);
 

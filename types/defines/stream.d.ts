@@ -28,17 +28,6 @@ interface StreamBinding {
    */
   video(id: string): StreamVideoHandle;
   /**
-   * Uploads a new video from a File.
-   * @param file The video file to upload.
-   * @returns The uploaded video details.
-   * @throws {BadRequestError} if the upload parameter is invalid
-   * @throws {QuotaReachedError} if the account storage capacity is exceeded
-   * @throws {MaxFileSizeError} if the file size is too large
-   * @throws {RateLimitedError} if the server received too many requests
-   * @throws {InternalError} if an unexpected error occurs
-   */
-  upload(file: File): Promise<StreamVideo>;
-  /**
    * Uploads a new video from a provided URL.
    * @param url The URL to upload from.
    * @param params Optional upload parameters.

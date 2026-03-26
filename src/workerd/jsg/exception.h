@@ -153,6 +153,10 @@ TunneledErrorType tunneledErrorType(kj::StringPtr internalMessage);
 // Annotate an internal message with the corresponding brokenness reason.
 kj::String annotateBroken(kj::StringPtr internalMessage, kj::StringPtr brokennessReason);
 
+// Returns true if the exception description originated from user code throwing inside
+// blockConcurrencyWhile. Handles any leading "remote." prefixes transparently.
+bool isExceptionFromInputGateBroken(kj::StringPtr description);
+
 constexpr kj::Exception::DetailTypeId EXCEPTION_IS_USER_ERROR = 0x82aff7d637c30e47ull;
 
 struct ExceptionToJsOptions {

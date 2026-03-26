@@ -225,6 +225,14 @@ kj::Own<jsg::modules::ModuleBundle> getInternalNodeJsCompatModuleBundle(auto fea
   }
 #undef V
   jsg::modules::ModuleBundle::getBuiltInBundleFromCapnp(builder, NODE_BUNDLE);
+
+  // Register Rust-implemented Node.js modules using the reusable adapter
+  // that bridges Rust ModuleCallback into BuiltinBuilder::addSynthetic.
+  {
+    ::workerd::rust::jsg::RustBuiltinModuleAdapter adapter(builder);
+    ::workerd::rust::api::register_nodejs_modules(adapter);
+  }
+
   return builder.finish();
 }
 
@@ -232,7 +240,79 @@ kj::Own<jsg::modules::ModuleBundle> getExternalNodeJsCompatModuleBundle(auto fea
   jsg::modules::ModuleBundle::BuiltinBuilder builder(
       jsg::modules::ModuleBundle::BuiltinBuilder::Type::BUILTIN);
   if (isNodeJsCompatEnabled(featureFlags)) {
-    jsg::modules::ModuleBundle::getBuiltInBundleFromCapnp(builder, NODE_BUNDLE);
+    jsg::modules::ModuleBundle::getBuiltInBundleFromCapnp(
+        builder, NODE_BUNDLE, [&](jsg::Module::Reader module) -> bool {
+      if (isNodeJsCompatFsModule(module.getName())) {
+        return featureFlags.getEnableNodeJsFsModule();
+      }
+      if (isNodeHttpModule(module.getName())) {
+        return featureFlags.getEnableNodejsHttpModules();
+      }
+      if (isNodeHttpServerModule(module.getName())) {
+        return featureFlags.getEnableNodejsHttpServerModules();
+      }
+      if (isNodeOsModule(module.getName())) {
+        return featureFlags.getEnableNodeJsOsModule();
+      }
+      if (isNodeHttp2Module(module.getName())) {
+        return featureFlags.getEnableNodeJsHttp2Module();
+      }
+      if (isNodeConsoleModule(module.getName())) {
+        return featureFlags.getEnableNodeJsConsoleModule();
+      }
+      if (module.getName() == "node:vm") {
+        return featureFlags.getEnableNodeJsVmModule();
+      }
+      if (module.getName() == "node:perf_hooks") {
+        return featureFlags.getEnableNodeJsPerfHooksModule();
+      }
+      if (module.getName() == "node:domain") {
+        return featureFlags.getEnableNodeJsDomainModule();
+      }
+      if (module.getName() == "node:child_process") {
+        return featureFlags.getEnableNodeJsChildProcessModule();
+      }
+      if (module.getName() == "node:v8") {
+        return featureFlags.getEnableNodeJsV8Module();
+      }
+      if (module.getName() == "node:tty") {
+        return featureFlags.getEnableNodeJsTtyModule();
+      }
+      if (module.getName() == "node:punycode") {
+        return featureFlags.getEnableNodeJsPunycodeModule();
+      }
+      if (module.getName() == "node:cluster") {
+        return featureFlags.getEnableNodeJsClusterModule();
+      }
+      if (module.getName() == "node:worker_threads") {
+        return featureFlags.getEnableNodeJsWorkerThreadsModule();
+      }
+      if (module.getName() == "node:_stream_wrap") {
+        return featureFlags.getEnableNodeJsStreamWrapModule();
+      }
+      if (module.getName() == "node:wasi") {
+        return featureFlags.getEnableNodeJsWasiModule();
+      }
+      if (module.getName() == "node:dgram") {
+        return featureFlags.getEnableNodeJsDgramModule();
+      }
+      if (module.getName() == "node:inspector" || module.getName() == "node:inspector/promises") {
+        return featureFlags.getEnableNodeJsInspectorModule();
+      }
+      if (module.getName() == "node:trace_events") {
+        return featureFlags.getEnableNodeJsTraceEventsModule();
+      }
+      if (module.getName() == "node:readline" || module.getName() == "node:readline/promises") {
+        return featureFlags.getEnableNodeJsReadlineModule();
+      }
+      if (module.getName() == "node:repl") {
+        return featureFlags.getEnableNodeJsReplModule();
+      }
+      if (module.getName() == "node:sqlite") {
+        return featureFlags.getEnableNodeJsSqliteModule();
+      }
+      return true;
+    });
   } else if (featureFlags.getNodeJsAls()) {
     // The AsyncLocalStorage API can be enabled independently of the rest
     // of the nodejs_compat layer.

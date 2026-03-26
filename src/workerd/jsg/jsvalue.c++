@@ -270,7 +270,6 @@ bool JsNumber::isSafeInteger(Lock& js) const {
   if (!inner->IsNumber()) return false;
   KJ_IF_SOME(value, value(js)) {
     if (std::isnan(value) || std::isinf(value) || std::trunc(value) != value) return false;
-    constexpr uint64_t MAX_SAFE_INTEGER = (1ull << 53) - 1;
     if (std::abs(value) <= static_cast<double>(MAX_SAFE_INTEGER)) return true;
   }
   return false;
@@ -718,15 +717,6 @@ kj::Array<kj::byte> JsArrayBuffer::copy() {
 
 // ======================================================================================
 // JsArrayBufferView
-
-kj::ArrayPtr<kj::byte> JsArrayBufferView::asArrayPtr() {
-  v8::Local<v8::ArrayBufferView> inner = *this;
-  auto buf = inner->Buffer();
-  if (buf->WasDetached()) [[unlikely]]
-    return nullptr;
-  kj::byte* data = static_cast<kj::byte*>(buf->Data()) + inner->ByteOffset();
-  return kj::ArrayPtr(data, inner->ByteLength());
-}
 
 size_t JsArrayBufferView::size() const {
   v8::Local<v8::ArrayBufferView> inner = *this;

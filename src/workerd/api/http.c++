@@ -888,7 +888,10 @@ jsg::Ref<Request> Request::deserialize(jsg::Lock& js,
     jsg::Deserializer& deserializer,
     const jsg::TypeHandler<RequestInitializerDict>& initDictHandler) {
   auto url = deserializer.readLengthDelimitedString();
-  auto init = KJ_ASSERT_NONNULL(initDictHandler.tryUnwrap(js, deserializer.readValue(js)));
+  auto init = KJ_UNWRAP_OR(initDictHandler.tryUnwrap(js, deserializer.readValue(js)), {
+    JSG_FAIL_REQUIRE(DOMDataCloneError,
+        "Deserialization failed: could not deserialize Request initializer");
+  });
   return Request::constructor(js, kj::mv(url), kj::mv(init));
 }
 
@@ -1435,8 +1438,14 @@ jsg::Ref<Response> Response::deserialize(jsg::Lock& js,
     jsg::Deserializer& deserializer,
     const jsg::TypeHandler<InitializerDict>& initDictHandler,
     const jsg::TypeHandler<kj::Maybe<jsg::Ref<ReadableStream>>>& streamHandler) {
-  auto body = KJ_ASSERT_NONNULL(streamHandler.tryUnwrap(js, deserializer.readValue(js)));
-  auto init = KJ_ASSERT_NONNULL(initDictHandler.tryUnwrap(js, deserializer.readValue(js)));
+  auto body = KJ_UNWRAP_OR(streamHandler.tryUnwrap(js, deserializer.readValue(js)), {
+    JSG_FAIL_REQUIRE(DOMDataCloneError,
+        "Deserialization failed: could not deserialize Response body");
+  });
+  auto init = KJ_UNWRAP_OR(initDictHandler.tryUnwrap(js, deserializer.readValue(js)), {
+    JSG_FAIL_REQUIRE(DOMDataCloneError,
+        "Deserialization failed: could not deserialize Response initializer");
+  });
 
   // If the status code is zero, then it was an error response. We cannot
   // use the Response::constructor.
@@ -1668,12 +1677,6 @@ jsg::Promise<jsg::Ref<Response>> fetchImplNoOutputLock(jsg::Lock& js,
         headers.setPtr(kj::HttpHeaderId::CONTENT_LENGTH, "0"_kj);
       }
 
-      KJ_IF_SOME(ctx, traceContext) {
-        KJ_IF_SOME(cfRay, headers.get(headerIds.cfRay)) {
-          ctx.setTag("cloudflare.ray_id"_kjc, cfRay);
-        }
-      }
-
       nativeRequest = client->request(jsRequest->getMethodEnum(), url, headers, maybeLength);
       auto& nr = KJ_ASSERT_NONNULL(nativeRequest);
       auto stream = newSystemStream(kj::mv(nr.body), StreamEncoding::IDENTITY);
@@ -1724,6 +1727,10 @@ jsg::Promise<jsg::Ref<Response>> fetchImplNoOutputLock(jsg::Lock& js,
         ctx.setTag("http.response.status_code"_kjc, static_cast<int64_t>(response.statusCode));
         KJ_IF_SOME(length, response.body->tryGetLength()) {
           ctx.setTag("http.response.body.size"_kjc, static_cast<int64_t>(length));
+        }
+        auto headerIds = IoContext::current().getHeaderIds();
+        KJ_IF_SOME(cfRay, response.headers->get(headerIds.cfRay)) {
+          ctx.setTag("cloudflare.ray_id"_kjc, cfRay);
         }
       }
       return handleHttpResponse(

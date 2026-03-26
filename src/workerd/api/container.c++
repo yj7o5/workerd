@@ -8,7 +8,31 @@
 #include <workerd/io/features.h>
 #include <workerd/io/io-context.h>
 
+#include <kj/filesystem.h>
+
+#include <cmath>
+
 namespace workerd::api {
+
+namespace {
+
+kj::Maybe<kj::Path> parseRestorePath(kj::StringPtr path) {
+  JSG_REQUIRE(path.size() > 0 && path[0] == '/', TypeError,
+      "Directory snapshot restore path must be absolute. Got: ", path);
+
+  try {
+    auto parsed = kj::Path::parse(path.slice(1));
+    if (parsed.size() == 0) {
+      return kj::none;
+    }
+    return kj::mv(parsed);
+  } catch (kj::Exception&) {
+    JSG_FAIL_REQUIRE(
+        TypeError, "Directory snapshot restore path contains invalid components: ", path);
+  }
+}
+
+}  // namespace
 
 // =======================================================================================
 // Basic lifecycle methods
@@ -56,11 +80,98 @@ void Container::start(jsg::Lock& js, jsg::Optional<StartupOptions> maybeOptions)
     }
   }
 
+  KJ_IF_SOME(labels, options.labels) {
+    auto list = req.initLabels(labels.fields.size());
+    for (auto i: kj::indices(labels.fields)) {
+      auto& field = labels.fields[i];
+      JSG_REQUIRE(field.name.size() > 0, Error, "Label names cannot be empty");
+      for (auto c: field.name) {
+        JSG_REQUIRE(static_cast<kj::byte>(c) >= 0x20, Error,
+            "Label names cannot contain control characters (index ", i, ")");
+      }
+      for (auto c: field.value) {
+        JSG_REQUIRE(static_cast<kj::byte>(c) >= 0x20, Error,
+            "Label values cannot contain control characters (index ", i, ")");
+      }
+      list[i].setName(field.name);
+      list[i].setValue(field.value);
+    }
+  }
+
+  if (!flags.getWorkerdExperimental()) {
+    JSG_REQUIRE(options.snapshots == kj::none, Error,
+        "Container snapshot restore requires the 'experimental' compatibility flag.");
+  } else {
+    KJ_IF_SOME(snapshots, options.snapshots) {
+      auto list = req.initSnapshots(snapshots.size());
+      for (auto i: kj::indices(snapshots)) {
+        auto entry = list[i];
+        auto& restore = snapshots[i];
+        auto& snap = restore.snapshot;
+        auto effectiveRestoreDir = snap.dir.asPtr();
+        KJ_IF_SOME(mp, restore.mountPoint) {
+          effectiveRestoreDir = mp.asPtr();
+        }
+
+        JSG_REQUIRE_NONNULL(parseRestorePath(effectiveRestoreDir), Error,
+            "Directory snapshot cannot be restored to root directory.");
+
+        double size = snap.size;
+        JSG_REQUIRE(std::isfinite(size) && size >= 0 &&
+                size <= static_cast<double>(jsg::MAX_SAFE_INTEGER) && std::floor(size) == size,
+            RangeError, "Snapshot size must be a non-negative integer <= Number.MAX_SAFE_INTEGER");
+        auto snapshotBuilder = entry.initSnapshot();
+        snapshotBuilder.setId(snap.id);
+        snapshotBuilder.setSize(static_cast<uint64_t>(size));
+        snapshotBuilder.setDir(snap.dir);
+        KJ_IF_SOME(name, snap.name) {
+          snapshotBuilder.setName(name);
+        }
+        KJ_IF_SOME(mp, restore.mountPoint) {
+          entry.setMountPoint(mp);
+        }
+      }
+    }
+  }
+
   req.setCompatibilityFlags(flags);
 
   IoContext::current().addTask(req.sendIgnoringResult());
 
   running = true;
+}
+
+jsg::Promise<Container::DirectorySnapshot> Container::snapshotDirectory(
+    jsg::Lock& js, DirectorySnapshotOptions options) {
+  JSG_REQUIRE(
+      running, Error, "snapshotDirectory() cannot be called on a container that is not running.");
+  JSG_REQUIRE(options.dir.size() > 0 && options.dir.startsWith("/"), TypeError,
+      "snapshotDirectory() requires an absolute directory path (starting with '/').");
+
+  auto req = rpcClient->snapshotDirectoryRequest();
+  req.setDir(options.dir);
+
+  KJ_IF_SOME(name, options.name) {
+    req.setName(name);
+  }
+
+  return IoContext::current()
+      .awaitIo(js, req.send())
+      .then(
+          js, [](jsg::Lock& js, capnp::Response<rpc::Container::SnapshotDirectoryResults> results) {
+    auto snapshot = results.getSnapshot();
+    jsg::Optional<kj::String> name = kj::none;
+    auto snapshotName = snapshot.getName();
+    if (snapshotName.size() > 0) {
+      name = kj::str(snapshotName);
+    }
+
+    JSG_REQUIRE(snapshot.getSize() <= jsg::MAX_SAFE_INTEGER, RangeError,
+        "Snapshot size exceeds Number.MAX_SAFE_INTEGER");
+
+    return Container::DirectorySnapshot{kj::str(snapshot.getId()),
+      static_cast<double>(snapshot.getSize()), kj::str(snapshot.getDir()), kj::mv(name)};
+  });
 }
 
 jsg::Promise<void> Container::setInactivityTimeout(jsg::Lock& js, int64_t durationMs) {
@@ -104,6 +215,19 @@ jsg::Promise<void> Container::interceptAllOutboundHttp(jsg::Lock& js, jsg::Ref<F
 
   return ioctx.awaitIo(js,
       kj::joinPromisesFailFast(kj::arr(reqV4.sendIgnoringResult(), reqV6.sendIgnoringResult())));
+}
+
+jsg::Promise<void> Container::interceptOutboundHttps(
+    jsg::Lock& js, kj::String addr, jsg::Ref<Fetcher> binding) {
+  auto& ioctx = IoContext::current();
+  auto channel = binding->getSubrequestChannel(ioctx);
+  auto token = channel->getToken(IoChannelFactory::ChannelTokenUsage::RPC);
+
+  auto req = rpcClient->setEgressHttpsRequest();
+  req.setHostPort(addr);
+  req.setChannelToken(token);
+
+  return ioctx.awaitIo(js, req.sendIgnoringResult());
 }
 
 jsg::Promise<void> Container::monitor(jsg::Lock& js) {

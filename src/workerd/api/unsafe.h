@@ -175,6 +175,23 @@ kj::Own<jsg::modules::ModuleBundle> getExternalUnsafeModuleBundle(auto featureFl
 
   static const auto kUnsafeSpecifier = "workerd:unsafe"_url;
   builder.addObject<UnsafeModule, TypeWrapper>(kUnsafeSpecifier);
+
+#ifdef WORKERD_FUZZILLI
+  {
+    static const auto kStdinSpecifier = "workerd:stdin"_url;
+    builder.addSynthetic(kStdinSpecifier,
+        jsg::modules::Module::newJsgObjectModuleHandler<Stdin, TypeWrapper>(
+            [](jsg::Lock& js) { return js.alloc<Stdin>(); }));
+  }
+
+  if (featureFlags.getWorkerdExperimental()) {
+    static const auto kFuzzilliSpecifier = "workerd:fuzzilli"_url;
+    builder.addSynthetic(kFuzzilliSpecifier,
+        jsg::modules::Module::newJsgObjectModuleHandler<Fuzzilli, TypeWrapper>(
+            [](jsg::Lock& js) { return js.alloc<Fuzzilli>(); }));
+  }
+#endif
+
   return builder.finish();
 }
 }  // namespace workerd::api

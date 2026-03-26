@@ -9,6 +9,8 @@
 
 namespace workerd::jsg {
 
+constexpr uint64_t MAX_SAFE_INTEGER = (1ull << 53) - 1;
+
 inline void requireOnStack(void* self) {
 #ifdef KJ_DEBUG
   kj::requireOnStack(self, "JsValue types must be allocated on stack");
@@ -254,7 +256,17 @@ class JsArrayBuffer final: public JsBase<v8::ArrayBuffer, JsArrayBuffer> {
 
 class JsArrayBufferView final: public JsBase<v8::ArrayBufferView, JsArrayBufferView> {
  public:
-  kj::ArrayPtr<kj::byte> asArrayPtr();
+  template <typename T = kj::byte>
+  kj::ArrayPtr<T> asArrayPtr() {
+    v8::Local<v8::ArrayBufferView> inner = *this;
+    auto buf = inner->Buffer();
+    if (buf->WasDetached()) [[unlikely]] {
+      return nullptr;
+    }
+    auto byteLength = inner->ByteLength();
+    T* data = reinterpret_cast<T*>(static_cast<kj::byte*>(buf->Data()) + inner->ByteOffset());
+    return kj::ArrayPtr(data, byteLength / sizeof(T));
+  }
 
   size_t size() const;
 
